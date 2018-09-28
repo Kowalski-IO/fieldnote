@@ -1,8 +1,8 @@
 package db
 
 import (
+	_ "github.com/lib/pq"
 	"github.com/jmoiron/sqlx"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 var (
@@ -10,5 +10,5 @@ var (
 )
 
 func InitDB(ds string) {
-	conn = sqlx.MustConnect("sqlite3", ds)
+	conn = sqlx.MustConnect("postgres", ds)
 }

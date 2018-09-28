@@ -3,7 +3,6 @@ package server
 import (
 	"github.com/gin-gonic/gin"
 	"kowalski.io/fieldnote/db"
-	"strconv"
 )
 
 func Init() {
@@ -12,8 +11,8 @@ func Init() {
 	r.POST("/join", func(c *gin.Context) {
 		var cr db.Credentials
 		c.BindJSON(&cr)
-		cr.Create()
-		c.JSON(200, &cr)
+		u, _ := cr.Create()
+		c.JSON(200, &u)
 	})
 
 	r.GET("/notes", func(c *gin.Context) {
@@ -24,20 +23,11 @@ func Init() {
 	r.POST("/notes", func(c *gin.Context) {
 		var n db.Note
 		c.BindJSON(&n)
-		n.Create()
-		c.JSON(200, &n)
+
+		r, _ := n.Upsert()
+
+		c.JSON(200, &r)
 	})
 
-	r.PUT("/notes/:id", func(c *gin.Context) {
-		var n db.Note
-		c.BindJSON(&n)
-
-		id := c.Param("id")
-		n.ID, _ = strconv.ParseInt(id, 10, 64)
-
-		n.Update()
-		c.JSON(200, &n)
-	})
-
-	r.Run()
+	r.Run(":9090")
 }

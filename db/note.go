@@ -3,91 +3,68 @@ package db
 import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
-	"database/sql"
+	"github.com/lib/pq"
+	"github.com/google/uuid"
 )
 
 type Note struct {
-	ID     int64  `json:"id"`
-	Title  string `json:"title"`
-	Owner  int64  `db:"owner_id" json:"owner_id"`
-	Public bool   `db:"visible" json:"public"`
-	Parts  []Part `json:"parts"`
+	ID     uuid.UUID `db:"id" json:"id"`
+	Owner  uuid.UUID `db:"owner_id" json:"owner_id"`
+	Title  string    `db:"title" json:"title"`
+	Public bool      `db:"visible" json:"public"`
+	Tags   []string  `db:"tags" json:"tags"`
+	Parts  []Part    `db:"-" json:"parts"`
 }
 
 type Part struct {
-	ID      int64  `json:"id"`
-	Parent  int64  `db:"parent_id" json:"parent"`
-	Title   string `json:"title"`
-	Kind    string `json:"kind"`
-	Content string `json:"content"`
+	ID       uuid.UUID `db:"id" json:"id"`
+	NoteID   uuid.UUID `db:"note_id" json:"note_id"`
+	Position int64     `db:"position" json:"position"`
+	Title    string    `db:"title" json:"title"`
+	Kind     string    `db:"kind" json:"kind"`
+	Content  string    `db:"content" json:"content"`
 }
 
-func (n Note) Create() (Note, error) {
-	var err error
+func (n Note) Upsert() (Note, error) {
 	tx, _ := conn.Begin()
 
-	res, err := tx.Exec(`INSERT INTO notes (title, owner_id, visible) VALUES (?, ?, ?)`,
-		n.Title, n.Owner, n.Public)
-
-	if err != nil {
-		tx.Rollback()
-		log.WithFields(log.Fields{
-			"cause": err.Error(),
-		}).Error("Error when inserting new note")
-		return Note{}, errors.Wrap(err, "Error when inserting new note")
+	if n.ID == uuid.Nil {
+		n.ID = uuid.New()
 	}
 
-	id, _ := res.LastInsertId()
-	n.ID = id
-
-	err = insertParts(n, tx)
+	_, err := tx.Exec("UPSERT INTO notes (id, owner_id, title, visible, tags) VALUES ($1, $2, $3, $4, $5)",
+		n.ID, n.Owner, n.Title, n.Public, pq.Array(n.Tags))
 
 	if err != nil {
 		tx.Rollback()
 		log.WithFields(log.Fields{
 			"cause": err.Error(),
-		}).Error("Error when inserting new note part")
-		return Note{}, errors.Wrap(err, "Error when inserting new note part")
+		}).Error("Error when upserting note")
+		return n, errors.Wrap(err, "Error when upserting note")
 	}
 
-	tx.Commit()
+	for i, v := range n.Parts {
+		if v.ID == uuid.Nil {
+			v.ID = uuid.New()
+		}
 
-	return n, nil
-}
+		v.NoteID = n.ID
+		_, err = tx.Exec("UPSERT INTO parts (id, note_id, position, title, kind, content) VALUES ($1, $2, $3, $4, $5, $6)",
+			v.ID, n.ID, n.Parts[i].Position, n.Parts[i].Title, n.Parts[i].Kind, n.Parts[i].Content)
 
-func (n Note) Update() (Note, error) {
-	var err error
-	tx, _ := conn.Begin()
+		if err != nil {
+			break
+		}
 
-	_, err = tx.Exec(`UPDATE notes SET title = ?, visible = ? WHERE id = ?`,
-		n.Title, n.Public, n.ID)
-
-	if err != nil {
-		tx.Rollback()
-		log.WithFields(log.Fields{
-			"cause": err.Error(),
-		}).Error("Error when updating note")
-		return Note{}, errors.Wrap(err, "Error when updating note")
+		n.Parts[i] = v
 	}
 
-	_, err = tx.Exec(`DELETE FROM parts WHERE parent_id = ?`, n.ID)
-
 	if err != nil {
 		tx.Rollback()
 		log.WithFields(log.Fields{
 			"cause": err.Error(),
-		}).Error("Error when deleting existing note parts")
-		return Note{}, errors.Wrap(err, "Error when deleting existing note parts")
-	}
-
-	err = insertParts(n, tx)
-
-	if err != nil {
-		tx.Rollback()
-		log.WithFields(log.Fields{
-			"cause": err.Error(),
-		}).Error("Error when updating note part")
-		return Note{}, errors.Wrap(err, "Error when updating note part")
+		}).Error("Error when upserting note")
+		return n, errors.Wrap(err, "Error when upserting parts")
 	}
 
 	tx.Commit()
@@ -97,9 +74,9 @@ func (n Note) Update() (Note, error) {
 
 func FetchNotes() ([]Note, error) {
 	var err error
-	var notes []Note
+	var n []Note
 
-	err = conn.Select(&notes, "SELECT * FROM notes")
+	rows, err := conn.Queryx("SELECT id, owner_id, title, visible, tags FROM notes")
 
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -108,31 +85,33 @@ func FetchNotes() ([]Note, error) {
 		return []Note{}, errors.Wrap(err, "Unable to select all notes")
 	}
 
-	for i := range notes {
-		err = conn.Select(&notes[i].Parts, "SELECT * FROM parts WHERE parent_id = ?", notes[i].ID)
-	}
+	defer rows.Close()
 
-	if err != nil {
-		log.WithFields(log.Fields{
-			"cause": err.Error(),
-		}).Error("Unable to select parts")
-		return []Note{}, errors.Wrap(err, "Unable to select parts")
-	}
+	for rows.Next() {
+		t := Note{}
 
-	return notes, nil
-}
-
-func insertParts(n Note, tx *sql.Tx) (error) {
-	var err error
-
-	for _, v := range n.Parts {
-		_, err = tx.Exec(`INSERT INTO parts (parent_id, title, kind, content) VALUES (?, ?, ?, ?)`,
-			n.ID, v.Title, v.Kind, v.Content)
+		err = rows.Scan(&t.ID, &t.Owner, &t.Title, &t.Public, pq.Array(&t.Tags))
 
 		if err != nil {
-			break
+			log.WithFields(log.Fields{
+				"cause": err.Error(),
+			}).Error("Unable to populate note")
+			return []Note{}, errors.Wrap(err, "Unable to populate note")
 		}
+
+		err := conn.Select(&t.Parts, "SELECT id, note_id, position, title, kind, content FROM parts WHERE note_id = $1", t.ID)
+
+		if err != nil {
+			if err != nil {
+				log.WithFields(log.Fields{
+					"cause": err.Error(),
+				}).Error("Unable to populate parts")
+				return []Note{}, errors.Wrap(err, "Unable to populate parts")
+			}
+		}
+
+		n = append(n, t)
 	}
 
-	return err
+	return n, nil
 }

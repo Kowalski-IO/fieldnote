@@ -1,17 +1,17 @@
 package db
 
 import (
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 	"fmt"
 )
 
 type User struct {
-	ID    int64  `json:"id,omitempty"`
-	Email string `json:"email"`
-	hash  string
+	ID    uuid.UUID `db:"id" json:"id,omitempty"`
+	Email string    `db:"email" json:"email"`
+	Hash  string    `db:"hash" json:"-"`
 }
 
-// Convenience type for login use.
 type Credentials struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -24,14 +24,14 @@ func (c Credentials) Create() (User, error) {
 		return User{}, err
 	}
 
-	res, err := conn.Exec(`INSERT INTO users (email, hash) VALUES (?, ?)`, c.Email, h)
+	u := User{ID: uuid.New(), Email: c.Email, Hash: string(h)}
+
+	_, err = conn.Exec("INSERT INTO users (id, email, hash) VALUES (?, ?, ?)", u.ID, u.Email, u.Hash)
 
 	if err != nil {
 		fmt.Println(err)
 		return User{}, err
 	}
 
-	id, _ := res.LastInsertId()
-
-	return User{ID: id, Email: c.Email}, nil
+	return u, nil
 }

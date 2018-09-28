@@ -5,7 +5,9 @@ import (
 	"kowalski.io/fieldnote/server"
 )
 
+const cockroach = "dbname=fieldnote user=root password=password host=localhost port=26257 sslmode=disable"
+
 func main() {
-	db.InitDB("/Users/brandon/Desktop/filenote.sqlite")
+	db.InitDB(cockroach)
 	server.Init()
 }
