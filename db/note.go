@@ -1,10 +1,12 @@
 package db
 
 import (
+	"fmt"
+
+	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
-	"github.com/lib/pq"
-	"github.com/google/uuid"
 )
 
 type Note struct {
@@ -41,6 +43,24 @@ func (n Note) Upsert() (Note, error) {
 			"cause": err.Error(),
 		}).Error("Error when upserting note")
 		return n, errors.Wrap(err, "Error when upserting note")
+	}
+
+	var ext []string
+
+	for _, v := range n.Parts {
+		ext = append(ext, v.ID.URN())
+	}
+
+	fmt.Println(ext)
+
+	_, err = tx.Exec("DELETE FROM parts WHERE note_id = $1 AND id NOT IN ($2)", n.ID, ext)
+
+	if err != nil {
+		tx.Rollback()
+		log.WithFields(log.Fields{
+			"cause": err.Error(),
+		}).Error("Error when deleting parts that have been removed")
+		return n, errors.Wrap(err, "Error when deleting parts that have been removed")
 	}
 
 	for i, v := range n.Parts {
